@@ -1,4 +1,4 @@
-// Token Radar — the value model and farm-plan generator (draft v1).
+// Token Radar — the value model and farm-plan generator (model radar-3).
 //
 // One sealed DefiLlama snapshot in, one ranked board out. Every number on the board comes
 // from the snapshot's own ten fields; no protocol name is ever special-cased, so the same
@@ -7,18 +7,36 @@
 // The model, stated exactly as the dashboard states it:
 //
 //   implied = round( tvl_usd
-//                    x categoryMultiple(category)   what protocols of this kind tend to be worth per TVL dollar
-//                    x growthMult                   1 + clamp(change_7d, -50, 100)/100 x 0.6
-//                    x maturityMult                 0.55 + 0.45 x min(age_days, 1460)/1460
-//                    x chainMult                    1 + 0.04 per extra chain, capped at 1.20
-//                    x scaleMult )                  1 + 0.08 per tenfold of TVL over the $5M snapshot floor, capped at 1.24
+//                    x fittedMultiple(category)   what the snapshot's own traded protocols of this
+//                                                 kind are worth per TVL dollar (see below)
+//                    x growthMult                 1 + clamp(change_7d, -50, 100)/100 x 0.6
+//                    x maturityMult               0.55 + 0.45 x min(age_days, 1460)/1460
+//                    x chainMult )                1 + 0.04 per extra chain, capped at 1.20
+//
+// The category multiple is fitted, not chosen. The snapshot's traded protocols (the ones that
+// record a token) are the comparables: each one's market cap over its TVL is what the market
+// currently pays per TVL dollar for a protocol of that kind. A category's multiple is the
+// median of its comparables' ratios, shrunk toward the global median over all comparables:
+//
+//   multiple = (n x category median + 3 x global median) / (n + 3)
+//
+// A category needs at least 3 comparables before its own median is trusted at all; with
+// fewer, it prices at the global median. A median of one observation is not a statistic —
+// on this snapshot the single traded prediction market records a capitalisation 400 times
+// its TVL, and trusting it would price a $320M protocol above $30B, more than ten times the
+// largest market cap in the snapshot. Thin categories are exactly where a fitted model must
+// fall back to the whole market's evidence, and the dashboard says so wherever it happens.
+//
+// radar-2 (the previous model) multiplied by a further scale factor for sheer TVL. That
+// double-counted size — TVL is already the thing being multiplied — so radar-3 drops it.
 //
 // A protocol counts as pre-token when its record carries no token (mcap, gecko id and symbol
 // all null). Protocols whose token already trades are never ranked here; the dashboard sets
 // them aside in a Live view with the market's own capitalisation. The board's early rows use
 // the house's own screen for a launch of one's own (see isLaunchCandidate): a wrapped, staked
 // or bridged product of a token that already trades — WBTC, a staked-ETH wrapper, a bridged
-// stablecoin — records no token of its own yet is no launch candidate, so it never ranks.
+// stablecoin — records no token of its own yet is no launch candidate, so it never ranks;
+// those protocols are shown, flagged with the reason, in the Products view instead.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -44,13 +62,35 @@ export interface Snapshot {
 }
 
 /** The model's version label, shown on the dashboard. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** Board size: the 40 watchlist protocols plus the best early finds below the floor. */
 export const BOARD_ROWS = 200;
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
-export const LIVE_ROWS = 24;
+export const LIVE_ROWS = 240;
+
+/** A category needs at least this many traded comparables before its own median is used. */
+export const MIN_COMPS = 3;
+
+/** How strongly a fitted category median is shrunk toward the global median. */
+export const SHRINK_PRIOR = 3;
+
+/** One category's calibration: its comparables, their median ratio, and the multiple used. */
+export interface CategoryCalibration {
+  category: string | null;
+  comps: number;
+  median: number | null;
+  multiple: number;
+  fitted: boolean;
+}
+
+/** The whole calibration, computed from the snapshot's traded protocols at run time. */
+export interface Calibration {
+  global_comps: number;
+  global_median: number;
+  categories: CategoryCalibration[];
+}
 
 /** One row of board.json. */
 export interface BoardRow {
@@ -71,11 +111,12 @@ export interface BoardRow {
   implied_value_usd: number;
   model: {
     category_multiple: number;
+    category_comps: number;
     growth_multiplier: number;
     maturity_multiplier: number;
     chain_multiplier: number;
-    scale_multiplier: number;
   };
+  risk_flags: string[];
   farm_steps: string[];
 }
 
@@ -94,6 +135,17 @@ export interface LiveRow {
   symbol: string | null;
 }
 
+/** A pre-token protocol the launch screen sets aside, with the reason it is no launch. */
+export interface ProductRow {
+  slug: string;
+  name: string;
+  category: string | null;
+  chains: string[];
+  tvl_usd: number;
+  change_7d: number | null;
+  reason: string;
+}
+
 /** Everything the dashboard renders. */
 export interface RadarData {
   as_of: string;
@@ -101,12 +153,18 @@ export interface RadarData {
   floor_usd: number;
   model_version: string;
   formula: string;
+  snapshot_size: number;
   watchlist_size: number;
   board_size: number;
   early_size: number;
   live_size: number;
+  live_total: number;
+  product_size: number;
+  surfaced_size: number;
+  calibration: Calibration;
   rows: RadarRow[];
   live: LiveRow[];
+  products: ProductRow[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -129,36 +187,87 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/**
- * What one TVL dollar tends to be worth at launch for this kind of protocol. Lending books
- * and CDPs monetise directly; bridges mostly pass value through, so theirs is lowest. The
- * match is on the snapshot's own category string, never on a protocol's name.
- */
-export function categoryMultiple(category: string | null): number {
-  const c = (category ?? '').toLowerCase();
-  if (c.includes('launchpad')) return 0.5;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 0.45;
-  if (c.includes('dex')) return 0.4;
-  if (c.includes('derivative') || c.includes('perpetual') || c.includes('options')) return 0.38;
-  if (c.includes('yield') || c.includes('curator') || c.includes('allocator') || c.includes('liquidity manager')) return 0.35;
-  if (c.includes('rwa')) return 0.32;
-  if (c.includes('staking') || c.includes('restak')) return 0.3;
-  if (c.includes('bridge')) return 0.22;
-  return 0.32;
+/** The median of a non-empty list of numbers, taken on a sorted copy. */
+function medianOf(values: number[]): number {
+  const s = [...values].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
 
-/** The five multipliers and the implied value one protocol gets. */
-export function impliedValue(p: SnapshotProtocol, asOf: string): { implied: number; categoryMult: number; growthMult: number; maturityMult: number; chainMult: number; scaleMult: number; age: number | null } {
+/**
+ * The calibration: what a TVL dollar is worth at launch, fitted from the snapshot's own
+ * traded protocols. A comparable is a protocol that records a token (so it is not pre-token)
+ * with a positive market cap and a positive TVL; its ratio is mcap / TVL. Categories are the
+ * snapshot's own category strings, matched exactly. Deterministic: comparables are taken in
+ * slug order and every median is computed on a sorted copy.
+ */
+export function calibrate(snapshot: Snapshot): Calibration {
+  const byCategory = new Map<string | null, number[]>();
+  const all: number[] = [];
+  const comps = snapshot.protocols
+    .filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  for (const p of comps) {
+    const ratio = p.mcap_usd! / p.tvl_usd;
+    all.push(ratio);
+    const list = byCategory.get(p.category);
+    if (list === undefined) byCategory.set(p.category, [ratio]);
+    else list.push(ratio);
+  }
+  const globalMedian = all.length > 0 ? medianOf(all) : 0;
+  const categories: CategoryCalibration[] = [...byCategory.entries()]
+    .map(([category, ratios]) => {
+      const med = medianOf(ratios);
+      const fitted = ratios.length >= MIN_COMPS;
+      return {
+        category,
+        comps: ratios.length,
+        median: round4(med),
+        multiple: round4(fitted ? (ratios.length * med + SHRINK_PRIOR * globalMedian) / (ratios.length + SHRINK_PRIOR) : globalMedian),
+        fitted,
+      };
+    })
+    .sort((a, b) => {
+      const ka = a.category ?? '';
+      const kb = b.category ?? '';
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+  return { global_comps: all.length, global_median: round4(globalMedian), categories };
+}
+
+/** The fitted multiple and comparable count one category prices at under a calibration. */
+export function fittedMultiple(cal: Calibration, category: string | null): { multiple: number; comps: number } {
+  const row = cal.categories.find((c) => c.category === category);
+  if (row === undefined) return { multiple: cal.global_median, comps: 0 };
+  return { multiple: row.multiple, comps: row.comps };
+}
+
+/**
+ * A board row's risk flags, each derived from the snapshot's own fields and nothing else:
+ * young (first tracked under 180 days ago), single-chain (its TVL sits on one chain),
+ * growth-spike (its seven-day TVL change is over 50% in either direction), thin-comps
+ * (fewer than five traded protocols of its category calibrate its multiple).
+ */
+export function riskFlags(p: SnapshotProtocol, age: number | null, categoryComps: number): string[] {
+  const flags: string[] = [];
+  if (age !== null && age < 180) flags.push('young');
+  if (p.chains.length <= 1) flags.push('single-chain');
+  if (p.change_7d !== null && Math.abs(p.change_7d) > 50) flags.push('growth-spike');
+  if (categoryComps < 5) flags.push('thin-comps');
+  return flags;
+}
+
+/** The multipliers and the implied value one protocol gets under a calibration. */
+export function impliedValue(p: SnapshotProtocol, asOf: string, cal: Calibration): { implied: number; categoryMult: number; categoryComps: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
   const age = ageDays(asOf, p.listed_at);
   const growthPct = Math.min(100, Math.max(-50, p.change_7d ?? 0));
   const growthMult = 1 + (growthPct / 100) * 0.6;
   const ageForModel = age ?? 540;
   const maturityMult = 0.55 + (Math.min(Math.max(ageForModel, 0), 1460) / 1460) * 0.45;
   const chainMult = Math.min(1 + 0.04 * Math.max(0, p.chains.length - 1), 1.2);
-  const scaleMult = Math.min(1 + 0.08 * Math.max(0, Math.log10(Math.max(p.tvl_usd, 1) / 5_000_000)), 1.24);
-  const categoryMult = categoryMultiple(p.category);
-  const implied = Math.max(1, Math.round(p.tvl_usd * categoryMult * growthMult * maturityMult * chainMult * scaleMult));
-  return { implied, categoryMult, growthMult, maturityMult, chainMult, scaleMult, age };
+  const { multiple, comps } = fittedMultiple(cal, p.category);
+  const implied = Math.max(1, Math.round(p.tvl_usd * multiple * growthMult * maturityMult * chainMult));
+  return { implied, categoryMult: multiple, categoryComps: comps, growthMult, maturityMult, chainMult, age };
 }
 
 /** Whether a protocol records no token at all. */
@@ -189,6 +298,15 @@ export function isLaunchCandidate(p: SnapshotProtocol): boolean {
   if (p.category !== null && PRODUCT_CATEGORIES.has(p.category)) return false;
   if (VERSIONED.test(p.name) || WRAPPED_NAME.test(p.name) || EXCHANGE_NAME.test(p.name)) return false;
   return true;
+}
+
+/** Why the launch screen sets a pre-token protocol aside, in the screen's own order of tests. */
+export function screenReason(p: SnapshotProtocol): string {
+  if (p.category !== null && PRODUCT_CATEGORIES.has(p.category)) return `product category: ${p.category}`;
+  if (VERSIONED.test(p.name)) return 'a versioned pool of another protocol';
+  if (WRAPPED_NAME.test(p.name)) return 'a wrapped or staked product by name';
+  if (EXCHANGE_NAME.test(p.name)) return 'an exchange product by name';
+  return 'screened out by the launch screen';
 }
 
 /** One-off gas for a small transaction on a chain, from the chain's own fee level. */
@@ -266,7 +384,9 @@ function step(s: string): string {
 /**
  * A protocol's farm plan: seven concrete steps derived from its own record — category decides
  * the action and the second action, the first chain decides the gas, TVL decides the capital,
- * age decides the hold. Every step names its cost and its duration.
+ * age decides the hold. The core action step names the row's own capital and hold up front,
+ * so the plan's two governing numbers are on the step a reader sees first. Every step names
+ * its cost and its duration.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   const chain = p.chains.length > 0 ? p.chains[0]! : 'its main chain';
@@ -276,7 +396,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   const weeks = Math.max(4, Math.round(hold / 7));
   return [
     step(`Open ${p.name}'s app from its official site and connect a fresh wallet that holds only farm funds, never a wallet with your savings. Cost: about ${gas} of gas on ${chain} for the first approval. Time: 10 minutes.`),
-    step(`${actionFor(p, capital, chain)}. Cost: $${capital} of capital plus about ${gas} of gas. Time: 15 minutes to set up.`),
+    step(`${actionFor(p, capital, chain)}; the position this plan farms is $${capital} held for at least ${hold} days. Cost: $${capital} of capital plus about ${gas} of gas. Time: 15 minutes to set up, then the ${hold}-day hold begins.`),
     step(deepenFor(p, capital, chain, gas)),
     step(`Make one small qualifying transaction every week — a $10 top-up, a swap or a vote — so the wallet shows a pattern of use, not a single visit. Cost: about ${gas} of gas per visit. Time: 10 minutes a week for ${weeks} weeks.`),
     step(`Hold the position for at least ${hold} days without dropping below half the starting balance; points and snapshot programs reward balances that stay. Cost: the $${capital} stays deployed and cannot be spent meanwhile. Time: ${hold} days.`),
@@ -286,12 +406,11 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
 }
 
 /** The ranked board: watchlist first as the floor, then the best early finds by implied value. */
-export function buildBoard(snapshot: Snapshot): BoardRow[] {
-  const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+export function buildBoard(snapshot: Snapshot, cal: Calibration): BoardRow[] {
   const watch = new Set(snapshot.watchlist);
   const scored = snapshot.protocols
     .filter((p) => watch.has(p.slug) || isLaunchCandidate(p))
-    .map((p) => ({ p, v: impliedValue(p, snapshot.as_of) }));
+    .map((p) => ({ p, v: impliedValue(p, snapshot.as_of, cal) }));
   const byValue = (a: { v: { implied: number }; p: SnapshotProtocol }, b: { v: { implied: number }; p: SnapshotProtocol }): number =>
     b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0);
   const watchlistRows = scored.filter((s) => watch.has(s.p.slug)).sort(byValue);
@@ -309,17 +428,18 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     listed_at: s.p.listed_at,
     gecko_id: s.p.gecko_id,
     symbol: s.p.symbol,
-    token_status: 'pre-token',
+    token_status: 'pre-token' as const,
     watchlist: watch.has(s.p.slug),
     age_days: s.v.age,
     implied_value_usd: s.v.implied,
     model: {
       category_multiple: s.v.categoryMult,
+      category_comps: s.v.categoryComps,
       growth_multiplier: round4(s.v.growthMult),
       maturity_multiplier: round4(s.v.maturityMult),
       chain_multiplier: round4(s.v.chainMult),
-      scale_multiplier: round4(s.v.scaleMult),
     },
+    risk_flags: riskFlags(s.p, s.v.age, s.v.categoryComps),
     farm_steps: farmSteps(s.p, s.v.age),
   }));
 }
@@ -333,27 +453,49 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     .map((p) => ({ slug: p.slug, name: p.name, category: p.category, chains: p.chains, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, change_7d: p.change_7d, symbol: p.symbol }));
 }
 
-/** The formula as the dashboard prints it. */
-export const FORMULA =
-  'implied = round( tvl_usd x category multiple (0.22 bridge to 0.50 launchpad) x (1 + clamp(change_7d, -50, 100)/100 x 0.6) x (0.55 + 0.45 x min(age_days, 1460)/1460) x (1 + 0.04 per extra chain, max 1.20) x (1 + 0.08 per tenfold of TVL over $5M, max 1.24) )';
+/** The pre-token protocols the launch screen sets aside, by TVL, for the Products view. */
+export function productRows(snapshot: Snapshot): ProductRow[] {
+  const watch = new Set(snapshot.watchlist);
+  return snapshot.protocols
+    .filter((p) => isPreToken(p) && !watch.has(p.slug) && !isLaunchCandidate(p))
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1))
+    .map((p) => ({ slug: p.slug, name: p.name, category: p.category, chains: p.chains, tvl_usd: p.tvl_usd, change_7d: p.change_7d, reason: screenReason(p) }));
+}
+
+/** The formula as the dashboard prints it, with this snapshot's fitted global median in it. */
+export function formulaText(cal: Calibration): string {
+  return (
+    `implied = round( tvl_usd x fitted category multiple (median mcap/TVL of the category's traded protocols, shrunk toward the global median ${cal.global_median} over ${cal.global_comps} traded protocols; ` +
+    `a category with fewer than ${MIN_COMPS} traded peers prices at the global median) x (1 + clamp(change_7d, -50, 100)/100 x 0.6) x (0.55 + 0.45 x min(age_days, 1460)/1460) x (1 + 0.04 per extra chain, max 1.20) )`
+  );
+}
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot);
+  const cal = calibrate(snapshot);
+  const board = buildBoard(snapshot, cal);
   const live = liveRows(snapshot);
+  const products = productRows(snapshot);
+  const liveTotal = snapshot.protocols.filter((p) => !isPreToken(p) && p.category !== 'CEX').length;
   const early = board.filter((r) => !r.watchlist).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
     model_version: MODEL_VERSION,
-    formula: FORMULA,
+    formula: formulaText(cal),
+    snapshot_size: snapshot.protocols.length,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    live_total: liveTotal,
+    product_size: products.length,
+    surfaced_size: board.length + live.length + products.length,
+    calibration: cal,
     rows: board,
     live,
+    products,
   };
   return { board, radar };
 }

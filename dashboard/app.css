@@ -116,3 +116,19 @@ tbody tr[data-selected="true"] { background: var(--signal-soft); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+/* radar-3 additions: risk-flag chips, stacked panels, two-column movers, detail flag list. */
+.chips { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.chip { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 10.5px; line-height: 1.7; border: 1px solid var(--amber); color: var(--amber); white-space: nowrap; font-family: var(--font-num); }
+.pill.product { border-color: var(--down); color: var(--down); }
+.stack { display: grid; gap: 16px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.panel.pad { padding: 18px 20px; display: grid; gap: 10px; }
+.panel.pad h2 { font-size: 18px; }
+.panel.pad p { font-size: 14px; max-width: 110ch; }
+.flags { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; font-size: 13.5px; color: var(--muted); }
+.flags .chip { margin-right: 2px; }
+.tabs { flex-wrap: wrap; }
+@media (max-width: 920px) {
+  .cols { grid-template-columns: 1fr; }
+}
