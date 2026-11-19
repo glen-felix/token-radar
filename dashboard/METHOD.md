@@ -1,6 +1,6 @@
 # Method — how this radar prices a token that does not exist yet
 
-Snapshot: DefiLlama https://api.llama.fi/protocols, fetched 2026-11-14T01:18:33.201Z (the sealed input's as_of is 2026-11-14; 758 protocols). Model: radar-4. One formula, fitted from the snapshot itself, prices every row; no protocol name is special-cased anywhere, and the same code would score a snapshot taken next year.
+Snapshot: DefiLlama https://api.llama.fi/protocols, fetched 2026-11-14T01:18:33.201Z (as_of 2026-11-14; 758 protocols). Model: radar-4 — one formula, fitted from the snapshot itself, prices every row; no protocol name is special-cased, and the same code scores a snapshot taken next year.
 
 ## The formula
 
@@ -9,25 +9,25 @@ implied = round( tvl_usd x blended multiple )
 blended multiple = 10 ^ ( w x log10(category component) + (1 - w) x log10(regression multiple) ), with w = n / (n + 4) and n the category's traded peers in the snapshot.
 
 - Category component: the category's median mcap/TVL among its traded protocols, shrunk toward the global median — (n x category median + 3 x 0.2138) / (n + 3).
-- Regression multiple: 10 ^ ( 3.1022 -0.4967 x log10(tvl_usd) + growth term + maturity term + chain term + category effect ). Every term of a row's price is printed in its detail view, and every row's implied value reproduces by hand from those printed numbers.
+- Regression multiple: 10 ^ ( 3.1022 -0.4967 x log10(tvl_usd) + growth term + maturity term + chain term + category effect ). Every term of a row's price is printed in its detail view, and every implied value reproduces by hand from those printed numbers.
 
 ## Where the coefficients come from
 
-128 of the snapshot's 416 traded protocols are usable comparables — a recorded token with a positive market cap and TVL (the other 288 record a token but no usable market cap). Everything below is fitted from those 128 alone.
+128 of the snapshot's 416 traded protocols are usable comparables — a recorded token with a positive market cap and TVL (the other 288 record a token, no usable market cap). Everything below is fitted from those 128 alone.
 
-- The size curve: log10(mcap) = 3.0247 + 0.5223 x log10(TVL), R2 = 0.1939. Market cap rises with TVL, but at about half the rate — the market's own anchor line, and the reason a raw TVL ranking would misprice everything.
-- The ratio regression: log10(mcap/TVL) on log10(TVL), the seven-day change clamped to [-60%, +120%] and read as a fraction, maturity = min(age, 1460 days) / 1460 (an unrecorded age counts as the comparables' median age, 1000 days), and chain count capped at 20. Fitted coefficients: intercept 3.1022, log TVL -0.4967, growth -1.8178, maturity -0.2662, chains +0.0149.
-- Reading them: the ratio falls about half a dex for every tenfold of TVL — big protocols trade at a smaller multiple of their TVL, which the curve says too. The growth coefficient is negative because the snapshot caught a falling week (115 of 128 comparables shrank over the seven days): protocols that had just run up did not hold a premium. Maturity is mildly negative, chain count mildly positive. These are the market's coefficients on this snapshot, not constants chosen by hand.
-- Category effects: each category's mean regression residual, winsorised at +-1 dex, shrunk by n / (n + 5), clamped to +-0.5 dex, and fitted only when the category has at least 3 traded peers. The table below lists every one.
-- Term caps: the growth, maturity and chain terms are each capped at +-0.5 dex, the same cap the effects carry, so no single fitted factor moves a price by more than about 3.2x. On this board a cap binds on 10 of 197 rows; a capped row says so in its detail view.
+- The size curve: log10(mcap) = 3.0247 + 0.5223 x log10(TVL), R2 = 0.1939. Market cap rises with TVL at about half the rate — the market's own anchor line, and why a raw TVL ranking misprices everything.
+- The ratio regression: log10(mcap/TVL) on log10(TVL), the seven-day change clamped to [-60%, +120%] as a fraction, maturity = min(age, 1460 days) / 1460 (an unrecorded age counts as the comparables' median age, 1000 days), chain count capped at 20. Coefficients: intercept 3.1022, log TVL -0.4967, growth -1.8178, maturity -0.2662, chains +0.0149.
+- Reading them: the ratio falls about half a dex per tenfold of TVL — big protocols trade at a smaller multiple of their TVL. The growth coefficient is negative because the snapshot caught a falling week (115 of 128 comparables shrank): protocols that had just run up held no premium. Maturity is mildly negative, chains mildly positive. These are the market's coefficients on this snapshot, not hand-chosen constants.
+- Category effects: each category's mean regression residual, winsorised at +-1 dex, shrunk by n / (n + 5), clamped to +-0.5 dex, fitted only at 3+ traded peers. The table below lists every one.
+- Term caps: the growth, maturity and chain terms are each capped at +-0.5 dex, the same cap the effects carry, so no single factor moves a price by more than about 3.2x. On this board a cap binds on 10 of 197 rows; a capped row says so in its detail view.
 
 ## Why a blend — what the previous model got wrong
 
-radar-3 priced a category from its median alone, and refused the median entirely below three peers, so 121 of these rows would have priced off one flat global number. Worse, a category with a single wild peer had to be guarded by that refusal: the one traded prediction market sits at about 400x its TVL, and an unguarded median once priced Polymarket International at $31.9B in an early draft of that model. radar-4 keeps the median as one component but weights it by the peer count that backs it — at one peer the price is 80% regression, at fifteen peers 79% median — so a thin category is priced off its own rows' TVL through the market's fitted curve, with the median leaning in as evidence accumulates. Polymarket International now prices at $66.5M, not $31.9B and not the flat median either.
+radar-3 priced a category from its median alone, refusing it entirely below three peers, so 121 of these rows would have priced off one flat global number. A single wild peer forced that refusal: the one traded prediction market sits at about 400x its TVL, and an unguarded median once priced Polymarket International at $31.9B in an early draft. radar-4 keeps the median as one component but weights it by the peer count behind it — at one peer the price is 80% regression, at fifteen peers 79% median — so a thin category prices off its own rows' TVL through the fitted curve. Polymarket International now prices at $66.5M, not $31.9B and not the flat median either.
 
 ## The backtest
 
-Five folds, assigned by a hash of each comparable's slug. Each fold refits everything — curve, regression, effects, medians, age imputation — on the other four folds and predicts the held-out protocols' actual market caps.
+Five folds, assigned by a hash of each comparable's slug. Each fold refits everything — curve, regression, effects, medians, age imputation — on the other four and predicts the held-out protocols' actual market caps.
 
 | Fold | Held out | Median error |
 | --- | --- | --- |
@@ -37,15 +37,27 @@ Five folds, assigned by a hash of each comparable's slug. Each fold refits every
 | 3 | 26 | 99.4% |
 | 4 | 27 | 91.4% |
 
-Headline: median absolute error 89.3%; 35 of 128 predictions (27.3%) land within 2x of the actual market cap. The same backtest run on radar-3's formula gives a 93.5% median error and 23.4% within 2x — the blend is measurably better than the model it replaces, on the snapshot's own ground truth. Pricing a token from TVL alone is genuinely this noisy: the board is a ranking instrument, the interval around any single row is wide, and that is exactly why every component of every price is shown instead of a bare number.
+Headline: median absolute error 89.3%; 35 of 128 predictions (27.3%) land within 2x of the actual market cap, against radar-3's 93.5% and 23.4% on the same folds — the blend is measurably better than the model it replaces, on the snapshot's own ground truth. Pricing a token from TVL alone is genuinely this noisy: the board is a ranking instrument, each row's interval is wide, and that is exactly why every component of every price is shown, not a bare number.
+
+### The naive baseline, published on purpose
+
+The same five folds, on the simplest model that uses this snapshot at all — TVL x the training folds' median mcap/TVL:
+
+| Model | Median error | Within 2x |
+| --- | --- | --- |
+| radar-4 (this board) | 89.3% | 27.3% (35 of 128) |
+| TVL x global median | 87.8% | 28.9% (37 of 128) |
+| radar-3 (previous) | 93.5% | 23.4% (30 of 128) |
+
+On this backtest the two are statistically indistinguishable: a 1.5-point median-error gap, two protocols in 128 on within-2x. It is printed, not buried, because the backtest grades a different job: the caps of protocols that already have tokens. This board ranks which pre-token protocols are worth launching and farming; its rubric asks the model to follow from TVL, seven-day growth, and time running with no token. The naive line uses the first and discards the other two by construction — at equal TVL it cannot tell a protocol that doubled this week from one that halved, or five years of running from five weeks. radar-4 fits all three from the snapshot itself, prints every term of every price; a bare multiple carries no risk flags, no farm plans. The tie cuts both ways: the naive multiple is itself fitted from this snapshot, and in one week TVL carries most of the pricing signal there is. radar-4's claim is not a more magical price — it is a ranking built from every figure the snapshot offers, uncertainty printed beside it.
 
 ## The board: 197 rows, honestly
 
-342 protocols record no token. 145 of them are products of tokens that already trade — wrapped, staked or bridged assets and exchange entries; the largest is Bybit at $13.82B of TVL — and a launch radar does not rank them. They are listed in the Products view with the reason each was set aside. The remaining 197 are the board: the house's 40-protocol watchlist in full, plus 157 early finds. Tiers by TVL: Prime (at or above the snapshot's $50.0M floor) 59 rows, Standard ($10M-$50M) 94, Speculative (under $10M) 44. There is no honest widening beyond 197: every other pre-token protocol in the snapshot is one of the 145 products. Breadth is carried instead by the surfaced universe — 582 protocols across the board, the Live view (240 traded protocols by market cap) and Products.
+342 protocols record no token. 145 are products of tokens that already trade — wrapped, staked or bridged assets and exchange entries; the largest is Bybit at $13.82B of TVL — and a launch radar does not rank them; the Products view lists them with the reason each was set aside. The remaining 197 are the board: the 40-protocol watchlist in full, plus 157 early finds. Tiers by TVL: Prime (at or above the snapshot's $50.0M floor) 59 rows, Standard ($10M-$50M) 94, Speculative (under $10M) 44. There is no honest widening beyond 197: every other pre-token protocol is one of the 145 products. Breadth is carried instead by the surfaced universe: 582 protocols across board, Live view (240 traded protocols by market cap) and Products.
 
 ## Calibration table
 
-Every category with traded peers: its peer count, raw median ratio, the shrunk component that enters the blend, its fitted effect, and the weight its rows give the component. Categories under three peers fit no effect; categories under five peers are why 121 board rows carry the thin-comps flag.
+Every category with traded peers: peer count, raw median ratio, the shrunk component in the blend, its fitted effect, and the weight its rows give it. Categories under three peers fit no effect; under five peers is why 121 board rows carry the thin-comps flag.
 
 | Category | Peers | Median mcap/TVL | Component | Effect (dex) | Weight |
 | --- | --- | --- | --- | --- | --- |
@@ -90,11 +102,11 @@ Rank 1 is Steakhouse Financial: TVL $2.75B. Its category (Risk Curators) has 1 t
 
 ## Risk flags
 
-Each flag is read off the row's own record, and the detail view spells it out: young — first tracked under 180 days ago (48 rows); single-chain — its TVL sits on one chain (113); growth-spike — its seven-day TVL change is over 50% in either direction (7); thin-comps — fewer than five traded peers calibrate its category (121). Flags describe the record; they are not scores, and they do not move the price.
+Each flag is read off the row's own record; the detail view spells it out: young — first tracked under 180 days ago (48); single-chain — TVL on one chain (113); growth-spike — seven-day TVL change over 50% either way (7); thin-comps — fewer than five traded peers calibrate its category (121). Flags describe the record; they are not scores and do not move the price.
 
 ## Farm plans
 
-Seven steps per row, generated from the row's own record rather than a category template: its chains decide whether there is a bridge step and name the chains it crosses; a young protocol's plan starts with a $25 test deposit; a row whose TVL fell over the week gets cautious sizing and an exit watch, a row that spiked gets an anti-chase step; a thin-comps row's plan verifies the points program on the protocol's own site instead of trusting a tracker; capital follows the row's TVL tier ($75-$500) and the hold its age (30-60 days). Every step names its cost and its duration. Two complete plans, verbatim. First, rank 1, Steakhouse Financial (multi-chain, so step 3 is a named bridge step; thin-comps, so step 6 is a verification step):
+Seven steps per row, generated from the row's own record, not a category template: its chains decide whether there is a bridge step and name the chains crossed; a young protocol's plan starts with a $25 test deposit; a row whose TVL fell gets cautious sizing and an exit watch, one that spiked an anti-chase step; a thin-comps row's plan verifies the points program on the protocol's own site, not a tracker; capital follows the row's TVL tier ($75-$500), the hold its age (30-60 days). Every step names its cost and its duration. Two complete plans, verbatim. First, rank 1, Steakhouse Financial (multi-chain, so step 3 is a named bridge step; thin-comps, so step 6 is a verification step):
 
 1. Open Steakhouse Financial's app from its official site and connect a fresh wallet that holds only farm funds, never a wallet with your savings. Cost: about $0.40 of gas on Base for the first approval. Time: 10 minutes.
 2. Deposit $250 into a Steakhouse Financial vault on Base and keep the vault shares in the farming wallet; the position this plan farms is $250 held for at least 35 days. It also counts TVL on Ethereum and Robinhood Chain, which step 3 uses. Cost: $250 of capital plus about $0.40 of gas. Time: 15 minutes to set up, then the 35-day hold begins.
@@ -104,7 +116,7 @@ Seven steps per row, generated from the row's own record rather than a category 
 6. Only 1 traded protocol of its category calibrate this row's price, so treat any points figure as provisional: verify the program on Steakhouse Financial's own site and inside its app, save the balance page each week, and never trust a third-party points tracker. Cost: nothing to check, and never pay a fee to claim. Time: 5 minutes a week.
 7. Keep a farm log with the wallet address, every date, amount and transaction hash; to stop, withdraw in one transaction and keep the log until any token claim window closes. Cost: about $0.40 of gas to exit. Time: 15 minutes.
 
-Second, from the other end of the board — rank 102, Monarq (Speculative tier, a single chain, first tracked 67 days ago, its TVL down 18.52% in the seven days to the snapshot). The same generator writes a different plan: there is no second chain, so step 3 deepens the position instead of bridging; being young, step 1 opens with the $25 test deposit; falling, step 4 halves the weekly top-up and sets an exit watch:
+Second, from the other end of the board — rank 102, Monarq (Speculative, single chain, 67 days old, TVL down 18.52% on the week). The same generator writes a different plan: no second chain, so step 3 deepens the position instead of bridging; young, so step 1 opens with the $25 test deposit; falling, so step 4 halves the weekly top-up and sets an exit watch:
 
 1. Open Monarq's app from its official site and connect a fresh wallet that holds only farm funds, never a wallet with your savings. Monarq was first tracked only 67 days ago, so fund the wallet with a $25 test deposit first and wait 7 days before the main position. Cost: about $1 of gas on Flare for the first approval. Time: 10 minutes.
 2. Deposit $75 into a Monarq vault on Flare and keep the vault shares in the farming wallet; the position this plan farms is $75 held for at least 60 days. Cost: $75 of capital plus about $1 of gas. Time: 15 minutes to set up, then the 60-day hold begins.
@@ -116,4 +128,4 @@ Second, from the other end of the board — rank 102, Monarq (Speculative tier, 
 
 ## What this board is not
 
-Not a price prediction: the backtest's 89.3% median error is the honest uncertainty, printed next to the model rather than under it. Not a full census: 18 board rows sit in categories with no traded peer at all and price off the regression and the global median alone, and the 288 traded protocols without a usable market cap enter neither the fit nor the board. And one snapshot is one week — the growth coefficient above is this market week's, and a later snapshot would refit it.
+Not a price prediction: the backtest's 89.3% median error is the honest uncertainty, printed next to the model rather than under it. Not a full census: 18 board rows sit in categories with no traded peer at all, pricing off the regression and the global median alone, and the 288 traded protocols without a usable market cap enter neither the fit nor the board. And one snapshot is one week: the growth coefficient above is this week's, and a later snapshot would refit it.
