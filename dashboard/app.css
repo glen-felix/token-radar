@@ -132,3 +132,16 @@ tbody tr[data-selected="true"] { background: var(--signal-soft); }
 @media (max-width: 920px) {
   .cols { grid-template-columns: 1fr; }
 }
+
+/* radar-4 additions: masthead band, tier pills, price-anatomy sub-rows. */
+.top { position: relative; }
+.top::before { content: ''; position: absolute; top: -24px; left: 0; right: 0; height: 6px; border-radius: 0 0 4px 4px; background: linear-gradient(90deg, var(--signal) 0%, var(--signal) 62%, var(--amber) 100%); }
+.brand .dot { background: var(--panel); border: 3px solid var(--signal); width: 13px; height: 13px; }
+.tierline { display: inline-flex; margin-top: 3px; }
+.pill.tier-prime { background: var(--signal); border-color: var(--signal); color: #fff; font-weight: 600; }
+.pill.tier-standard { background: var(--signal-soft); border-color: var(--signal); color: var(--signal); }
+.pill.tier-speculative { border-color: var(--amber); border-style: dashed; color: var(--amber); }
+td .chips { margin-top: 0; }
+.equation .subrow { font-size: 12.5px; }
+.equation .subrow span { padding-left: 16px; }
+.detail-head .brand-name { color: var(--signal); }

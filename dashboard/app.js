@@ -1,23 +1,25 @@
 // Token Radar dashboard. Reads window.RADAR (written beside dashboard/ by main.ts) and renders
 // five views of one sealed snapshot: the ranked pre-token board, the live tokens set aside,
 // the products the launch screen sets aside, the fitted model's calibration, and a movers &
-// risks view. The value model is stated on the page itself, in dashboard/METHOD.md and in
-// lib/model.ts; the farm plan shown in the drawer is the exact text main.ts wrote to
-// board.json — data.js carries farm_steps, the page never re-derives them. No network:
-// every byte rendered here ships in data.js.
+// risks view. The value model (radar-4: a peer-count-weighted blend of a shrunk category
+// median and a fitted regression multiple, graded by a five-fold backtest) is stated on the
+// page itself, in dashboard/METHOD.md and in lib/model.ts; the detail drawer prints every
+// term of a row's price so it reproduces by hand. The farm plan shown in the drawer is the
+// exact text main.ts wrote to board.json — data.js carries farm_steps, the page never
+// re-derives them. No network: every byte rendered here ships in data.js.
 (function () {
   'use strict';
 
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', wl: false, tab: 'board', sort: 'implied', dir: -1, selected: null };
+  var state = { q: '', category: 'all', chain: 'all', tier: 'all', wl: false, tab: 'board', sort: 'implied', dir: -1, selected: null };
   var FLAG_LABEL = { 'young': 'young', 'single-chain': '1 chain', 'growth-spike': '7d spike', 'thin-comps': 'thin comps' };
   var FLAG_NOTE = {
     'young': 'first tracked under 180 days ago',
     'single-chain': 'its TVL sits on a single chain',
     'growth-spike': 'its TVL moved over 50% in seven days, either way',
-    'thin-comps': 'fewer than five traded protocols of its category calibrate its multiple'
+    'thin-comps': 'fewer than five traded protocols of its category calibrate its price'
   };
 
   function fmtUsd(n) {
@@ -37,6 +39,8 @@
     return Math.max(0, Math.round(days)) + 'd';
   }
   function fmtMult(n) { return '\u00d7 ' + (Math.round(n * 10000) / 10000); }
+  function fmtDex(n) { return (n > 0 ? '+' : '') + (Math.round(n * 10000) / 10000).toFixed(4) + ' dex'; }
+  function tierPill(r) { return el('span', { class: 'pill tier-' + r.tier.toLowerCase(), text: r.tier }); }
 
   function el(tag, attrs) {
     var node = document.createElement(tag);
@@ -66,6 +70,7 @@
     if (params.get('p')) state.selected = params.get('p');
     if (params.get('category')) state.category = params.get('category');
     if (params.get('chain')) state.chain = params.get('chain');
+    if (params.get('tier')) state.tier = params.get('tier');
     if (params.get('wl') === '1') state.wl = true;
     if (params.get('tab')) state.tab = params.get('tab');
   }
@@ -74,6 +79,7 @@
     if (state.q) params.set('q', state.q);
     if (state.category !== 'all') params.set('category', state.category);
     if (state.chain !== 'all') params.set('chain', state.chain);
+    if (state.tier !== 'all') params.set('tier', state.tier);
     if (state.wl) params.set('wl', '1');
     if (state.tab !== 'board') params.set('tab', state.tab);
     if (state.selected) params.set('p', state.selected);
@@ -93,6 +99,7 @@
       if (state.wl && !r.watchlist) return false;
       if (state.category !== 'all' && (r.category || 'Other') !== state.category) return false;
       if (state.chain !== 'all' && (r.chains || []).indexOf(state.chain) < 0) return false;
+      if (state.tier !== 'all' && r.tier !== state.tier) return false;
       return matchesQ(r);
     });
   }
@@ -120,7 +127,7 @@
     return el('td', null, el('div', { class: 'pname' },
       el('b', { text: r.name }),
       el('span', { class: 'sub', text: (r.category || 'Other') + ' \u00b7 ' + (r.chains && r.chains.length ? r.chains.slice(0, 3).join(', ') : 'an unnamed chain') }),
-      chips(r)
+      el('span', { class: 'tierline' }, tierPill(r))
     ));
   }
 
@@ -144,14 +151,16 @@
           el('b', { text: DATA.watchlist_size + ' watchlist protocols' }),
           ' (at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL) are the floor; the radar adds ',
           el('b', { text: DATA.early_size + ' earlier finds' }),
-          ' the list leaves out, screened so no wrapped, staked or bridged product of a trading token ranks as a launch — those products are shown, with the reason, in the Products view. Protocols whose token already trades are set aside in the Live view: their market cap is a fact, not a model.'
+          ' the list leaves out, screened so no wrapped, staked or bridged product of a trading token ranks as a launch — those products are shown, with the reason, in the Products view. Protocols whose token already trades are set aside in the Live view: their market cap is a fact, not a model. Rows are tiered by TVL — Prime at or above the snapshot\u2019s floor, Standard from $10M, Speculative below it — and each row\u2019s risk flags sit in their own column.'
         )
       ),
       el('div', { class: 'stats' },
         el('div', { class: 'stat' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
         el('div', { class: 'stat' }, el('span', { text: 'Pre-token rows ranked' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'stat' }, el('span', { text: 'Protocols surfaced' }), el('b', { text: DATA.surfaced_size + ' of ' + DATA.snapshot_size })),
-        el('div', { class: 'stat' }, el('span', { text: 'Products set aside' }), el('b', { text: String(DATA.product_size) }))
+        el('div', { class: 'stat' }, el('span', { text: 'Products set aside' }), el('b', { text: String(DATA.product_size) })),
+        el('div', { class: 'stat' }, el('span', { text: 'Prime / Standard / Speculative' }), el('b', { text: DATA.tiers.prime + ' / ' + DATA.tiers.standard + ' / ' + DATA.tiers.speculative })),
+        el('div', { class: 'stat' }, el('span', { text: 'Backtest median error' }), el('b', { text: DATA.calibration.backtest.median_ape_pct.toFixed(1) + '%' }))
       )
     );
   }
@@ -160,7 +169,7 @@
     return el('section', { class: 'model-strip' },
       el('h2', { text: 'The value model — fitted from the snapshot\u2019s own traded protocols' }),
       el('div', { class: 'formula', text: DATA.formula }),
-      el('p', { text: 'No multiple is picked by hand. Each category\u2019s multiple is the median market-cap-to-TVL of its traded protocols in this snapshot, shrunk toward the global median; a category with fewer than three traded peers has no median worth trusting and prices at the global median instead, and its rows carry a thin-comps flag. Growth is the snapshot\u2019s own seven-day TVL change, clamped so one hot week cannot carry a board. Maturity rewards protocols that have run longer with no token. Nothing else enters the score: no hand-picked names, no outside data, no bonus for size — TVL is already the thing being priced. The Model view shows the whole calibration table.' })
+      el('p', { text: 'No coefficient is picked by hand. The regression\u2019s five coefficients and every category effect are fitted from the snapshot\u2019s own ' + DATA.calibration.global_comps + ' traded comparables; the category component is their median mcap/TVL, shrunk toward the global median; and the two are blended geometrically, weighted by the peer count behind the median, so a thin category leans on the regression — priced off its own TVL through the market\u2019s fitted curve — instead of one flat number or one wild peer. Each factor term is capped at \u00b10.5 dex, so no single fitted factor moves a price by more than about 3.2\u00d7. The fit is graded in the open: the Model view publishes the size curve, the coefficient table, the whole calibration and a five-fold backtest against the comparables\u2019 actual market caps, with the previous model\u2019s backtest beside it.' })
     );
   }
 
@@ -193,6 +202,11 @@
       chains.map(function (c) { return el('option', { value: c, text: c, selected: c === state.chain ? 'selected' : null }); })
     );
     chainSel.addEventListener('change', function () { state.chain = chainSel.value; writeHash(); render(); });
+    var tierSel = el('select', { id: 'tier', 'aria-label': 'Filter by tier' },
+      el('option', { value: 'all', text: 'All tiers' }),
+      ['Prime', 'Standard', 'Speculative'].map(function (t) { return el('option', { value: t, text: t, selected: t === state.tier ? 'selected' : null }); })
+    );
+    tierSel.addEventListener('change', function () { state.tier = tierSel.value; writeHash(); render(); });
     var wlBox = el('input', { type: 'checkbox', id: 'wl', 'aria-label': 'Watchlist only' });
     if (state.wl) wlBox.setAttribute('checked', 'checked');
     wlBox.addEventListener('change', function () { state.wl = wlBox.checked; writeHash(); render(); });
@@ -203,6 +217,7 @@
       el('div', { class: 'field' }, el('label', { for: 'q', text: 'Search' }), search),
       el('div', { class: 'field' }, el('label', { for: 'category', text: 'Category' }), catSel),
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chainSel),
+      el('div', { class: 'field' }, el('label', { for: 'tier', text: 'Tier' }), tierSel),
       el('label', { class: 'check' }, wlBox, 'Watchlist only'),
       el('div', { class: 'field' }, el('span', { class: 'lab', text: 'View' }), tabs),
       el('span', { class: 'count', text: countText() })
@@ -224,7 +239,7 @@
       return el('div', { class: 'panel' }, el('div', { class: 'empty' },
         el('h2', { text: 'No protocol matches that filter' }),
         el('p', { text: 'Clear the search or widen the category, chain and watchlist filters to see the board again.' }),
-        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.wl = false; writeHash(); render(); } })
+        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.tier = 'all'; state.wl = false; writeHash(); render(); } })
       ));
     }
     var max = 0;
@@ -248,6 +263,7 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', null, chips(r) || el('span', { class: 'sub', text: 'none' })),
         el('td', null, r.watchlist
           ? el('span', { class: 'pill', text: 'watchlist' })
           : el('span', { class: 'pill early', text: 'early find' }))
@@ -257,7 +273,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { text: 'Pre-token protocols ranked by implied launch value under model ' + DATA.model_version + '. Flags mark rows to read with care: young, single-chain, a seven-day spike, or a multiple calibrated on thin comparables. Select any row for its model breakdown and farm plan.' }),
+          el('caption', { text: 'Pre-token protocols ranked by implied launch value under model ' + DATA.model_version + '. Each row carries its TVL tier — Prime at or above the snapshot floor, Standard from $10M, Speculative below — and its risk flags in their own column: young, single-chain, a seven-day spike, or a price calibrated on thin comparables. Select any row for its full price breakdown and farm plan.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -265,6 +281,7 @@
             sortHeader('growth', '7d change'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            el('th', { scope: 'col', text: 'Risk flags' }),
             el('th', { scope: 'col', text: 'Radar' })
           )),
           tbody
@@ -320,32 +337,80 @@
 
   function modelView() {
     var cal = DATA.calibration;
+    var b = cal.beta;
+    var bt = cal.backtest;
+    var coefBody = el('tbody');
+    [
+      ['Intercept', b.intercept, 'the fitted level, before the size term pulls it down'],
+      ['log10(TVL)', b.log_tvl, 'each tenfold of TVL cuts the multiple by about half a dex \u2014 big protocols trade at a smaller multiple of their TVL'],
+      ['7-day growth', b.growth, 'fitted on a falling week: protocols that had just run up held no premium on this snapshot'],
+      ['Maturity', b.maturity, 'a fully mature protocol (four years) prices about a quarter dex under a new one, other things equal'],
+      ['Chains', b.chains, 'each chain, up to 20, adds a little \u2014 presence across chains is worth something, not much']
+    ].forEach(function (row) {
+      coefBody.appendChild(el('tr', null,
+        el('td', null, el('b', { text: row[0] })),
+        el('td', { class: 'num', text: fmtDex(row[1]) }),
+        el('td', { text: row[2] })
+      ));
+    });
+    var foldBody = el('tbody');
+    bt.folds.forEach(function (f) {
+      foldBody.appendChild(el('tr', null,
+        el('td', { class: 'num', text: String(f.fold) }),
+        el('td', { class: 'num', text: String(f.comps) }),
+        el('td', { class: 'num', text: f.median_ape_pct.toFixed(1) + '%' })
+      ));
+    });
     var tbody = el('tbody');
     cal.categories.forEach(function (c) {
       tbody.appendChild(el('tr', null,
         el('td', null, el('b', { text: c.category || 'Uncategorised' })),
         el('td', { class: 'num', text: String(c.comps) }),
         el('td', { class: 'num', text: c.median === null ? 'n/a' : String(c.median) }),
-        el('td', { class: 'num', text: String(c.multiple) }),
+        el('td', { class: 'num', text: String(c.component) }),
+        el('td', { class: 'num', text: c.fitted ? fmtDex(c.effect_dex) : 'not fitted' }),
+        el('td', { class: 'num', text: c.weight.toFixed(2) }),
         el('td', null, c.fitted
-          ? el('span', { class: 'pill', text: 'fitted, shrunk to global' })
-          : el('span', { class: 'pill early', text: 'global median \u2014 too few peers' }))
+          ? el('span', { class: 'pill', text: 'fitted from its peers' })
+          : el('span', { class: 'pill early', text: 'thin \u2014 regression carries it' }))
       ));
     });
     return el('div', { class: 'stack' },
       el('div', { class: 'panel pad' },
-        el('h2', { text: 'Calibration — every multiple on the board, from the snapshot\u2019s own market' }),
-        el('p', { class: 'sub', text: 'A comparable is a protocol in the snapshot that already records a token, with a positive market cap and TVL; its ratio is market cap over TVL. The global median over all ' + cal.global_comps + ' comparables is ' + cal.global_median + '. A category\u2019s multiple is (n \u00d7 its median + 3 \u00d7 the global median) / (n + 3) when it has at least three comparables; below that it prices at the global median. The same table, with the screen rules and the farm-plan derivation, is written out in METHOD.md beside this page.' }),
+        el('h2', { text: 'The fit \u2014 every coefficient from the snapshot\u2019s own market' }),
+        el('p', { text: 'A comparable is a protocol in the snapshot that already records a token, with a positive market cap and TVL; there are ' + cal.global_comps + ' of them, and everything on this page is fitted from those alone. First the anchor: a log-log curve of market cap on TVL over the comparables, log10(mcap) = ' + cal.curve.intercept.toFixed(4) + ' + ' + cal.curve.slope.toFixed(4) + ' \u00d7 log10(TVL), R2 = ' + cal.curve.r2.toFixed(4) + ' \u2014 market cap rises with TVL at about half the rate. Then the ratio regression the board actually prices with: log10(mcap/TVL) on size, the seven-day change clamped to [\u221260%, +120%] and read as a fraction, maturity as min(age, 1460 days) / 1460, and chain count capped at 20.' }),
         el('div', { class: 'table-wrap' },
           el('table', null,
-            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Traded peers' }), el('th', { scope: 'col', text: 'Median mcap / TVL' }), el('th', { scope: 'col', text: 'Multiple used' }), el('th', { scope: 'col', text: 'Basis' }))),
+            el('caption', { text: 'The fitted coefficients. A row\u2019s regression multiple is 10 raised to the intercept plus each coefficient times the row\u2019s own feature, plus its category effect; each of the growth, maturity and chain terms is then capped at \u00b10.5 dex.' }),
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Term' }), el('th', { scope: 'col', text: 'Coefficient' }), el('th', { scope: 'col', text: 'What it reads' }))),
+            coefBody
+          )
+        ),
+        el('p', { class: 'sub', text: 'Global median mcap/TVL over the comparables: ' + cal.global_median + '. An unrecorded age counts as the comparables\u2019 median age, ' + cal.median_age_days + ' days. Category effects are winsorised mean residuals, shrunk by n/(n+5) and clamped to \u00b10.5 dex, fitted only at three or more peers. A factor cap binds on ' + cal.capped_rows + ' of the ' + DATA.board_size + ' board rows; a capped row says so in its detail view.' })
+      ),
+      el('div', { class: 'panel pad' },
+        el('h2', { text: 'The backtest \u2014 the model graded against the market' }),
+        el('p', { text: 'Five folds, assigned by a hash of each comparable\u2019s slug. Each fold refits everything \u2014 curve, regression, effects, medians, age imputation \u2014 on the other four folds and predicts the held-out protocols\u2019 actual market caps. Median absolute error ' + bt.median_ape_pct.toFixed(1) + '%; ' + bt.within_2x + ' of ' + bt.comps + ' predictions (' + bt.within_2x_pct.toFixed(1) + '%) land within 2\u00d7 of the actual market cap. The same backtest on the previous model, radar-3\u2019s category median alone: ' + bt.previous_median_ape_pct.toFixed(1) + '% median error, ' + bt.previous_within_2x_pct.toFixed(1) + '% within 2\u00d7. Pricing a token from TVL alone is genuinely this noisy \u2014 the board is a ranking instrument, and that is why every component of every price is printed.' }),
+        el('div', { class: 'table-wrap' },
+          el('table', null,
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Fold' }), el('th', { scope: 'col', text: 'Held out' }), el('th', { scope: 'col', text: 'Median error' }))),
+            foldBody
+          )
+        )
+      ),
+      el('div', { class: 'panel pad' },
+        el('h2', { text: 'Calibration \u2014 every category\u2019s component, effect and blend weight' }),
+        el('p', { class: 'sub', text: 'The component is the category\u2019s median mcap/TVL shrunk toward the global median, (n \u00d7 median + 3 \u00d7 ' + cal.global_median + ') / (n + 3). The weight is what the board\u2019s blend gives that component, n / (n + 4); the rest of the weight sits on the regression. Below three peers no effect is fitted and the weight is small by construction, so a thin category is priced mostly off its own rows\u2019 TVL through the fitted curve \u2014 never off one flat number, and never off one wild peer. The same tables, with the screen rules and worked examples, are written out in METHOD.md beside this page.' }),
+        el('div', { class: 'table-wrap' },
+          el('table', null,
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Traded peers' }), el('th', { scope: 'col', text: 'Median mcap / TVL' }), el('th', { scope: 'col', text: 'Component' }), el('th', { scope: 'col', text: 'Effect' }), el('th', { scope: 'col', text: 'Weight' }), el('th', { scope: 'col', text: 'Basis' }))),
             tbody
           )
         )
       ),
       el('div', { class: 'panel pad' },
         el('h2', { text: 'How the board is built' }),
-        el('p', { text: 'Coverage first: every one of the ' + DATA.watchlist_size + ' watchlist protocols is on the board. The launch screen then admits every other pre-token protocol that is not a product of a trading token — not a bridge, staking or exchange product category, not a versioned pool of another protocol, not a wrapped or staked product by name, not an exchange\u2019s own product. Screened-out protocols are not hidden: the Products view lists all ' + DATA.product_size + ' of them with the reason. Each admitted protocol is scored by the formula above and ranked by the result; each carries risk flags read from its own record (young, single-chain, seven-day spike, thin comparables) and a seven-step farm plan whose capital comes from its TVL tier, whose hold comes from its age, whose gas comes from its first chain and whose actions come from its category.' })
+        el('p', { text: 'Coverage first: every one of the ' + DATA.watchlist_size + ' watchlist protocols is on the board. The launch screen then admits every other pre-token protocol that is not a product of a trading token \u2014 not a bridge, staking or exchange product category, not a versioned pool of another protocol, not a wrapped or staked product by name, not an exchange\u2019s own product. That admits ' + DATA.early_size + ' early finds and sets ' + DATA.product_size + ' products aside; the Products view lists every one of them with the reason. There is no honest row beyond the ' + DATA.board_size + ' on the board: every other pre-token protocol in the snapshot is one of those products \u2014 a wrapped bitcoin or a bridged stablecoin is no launch, however large its TVL. Rows are tiered by TVL (Prime at the snapshot\u2019s floor, Standard from $10M, Speculative below), carry risk flags read from their own record, and each has a seven-step farm plan generated from that record: its chains decide the bridge step and name it, its seven-day change decides the cadence step, its category\u2019s peer count decides the verification step, its TVL the capital, its age the hold and whether the plan starts with a test deposit.' })
       )
     );
   }
@@ -355,7 +420,7 @@
     list.forEach(function (r) {
       tbody.appendChild(el('tr', { tabindex: '0', onclick: function () { state.tab = 'board'; openDetail(r.slug); } },
         el('td', { class: 'num', text: String(r.rank) }),
-        el('td', null, el('div', { class: 'pname' }, el('b', { text: r.name }), el('span', { class: 'sub', text: (r.category || 'Other') }), chips(r))),
+        el('td', null, el('div', { class: 'pname' }, el('b', { text: r.name }), el('span', { class: 'sub', text: (r.category || 'Other') }), el('span', { class: 'tierline' }, tierPill(r)), chips(r))),
         el('td', { class: 'num ' + (r.change_7d >= 0 ? 'pos' : 'neg'), text: fmtPct(r.change_7d) }),
         el('td', { class: 'num', text: fmtUsd(r.implied_value_usd) })
       ));
@@ -391,7 +456,7 @@
     flagged.forEach(function (r) {
       flagBody.appendChild(el('tr', { tabindex: '0', onclick: function () { state.tab = 'board'; openDetail(r.slug); } },
         el('td', { class: 'num', text: String(r.rank) }),
-        el('td', null, el('div', { class: 'pname' }, el('b', { text: r.name }), el('span', { class: 'sub', text: (r.category || 'Other') }), chips(r))),
+        el('td', null, el('div', { class: 'pname' }, el('b', { text: r.name }), el('span', { class: 'sub', text: (r.category || 'Other') }), el('span', { class: 'tierline' }, tierPill(r)), chips(r))),
         el('td', { class: 'num', text: fmtUsd(r.implied_value_usd) })
       ));
     });
@@ -436,25 +501,36 @@
     dialog.textContent = '';
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
-        el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' \u00b7 watchlist' : ' \u00b7 early find') }),
+        el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' \u00b7 watchlist' : ' \u00b7 early find') + ' \u00b7 ' + row.tier + ' tier' }),
         el('h2', { id: 'detail-title', text: row.name }),
         el('p', { class: 'sub', text: (row.category || 'Other') + ' \u00b7 ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') + ' \u00b7 first tracked ' + (row.listed_at || 'on an unrecorded date') })
       ),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
     var m = row.model;
-    var fitted = m.category_comps >= 3;
+    var cal = DATA.calibration;
+    var w = m.blend_weight;
+    var lt = Math.log10(Math.max(1, row.tvl_usd));
+    var gClamped = Math.min(120, Math.max(-60, row.change_7d === null ? 0 : row.change_7d));
+    var ageUsed = row.age_days === null ? cal.median_age_days : row.age_days;
+    var matFrac = Math.min(ageUsed, 1460) / 1460;
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Why this implied value' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL (snapshot)' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'Category multiple (' + (row.category || 'Other') + (fitted ? ', fitted from ' + m.category_comps + ' traded peers' : ', global median \u2014 ' + (m.category_comps === 0 ? 'no traded peers' : 'only ' + m.category_comps + ' traded peer' + (m.category_comps === 1 ? '' : 's'))) + ')' }), el('b', { class: 'num', text: fmtMult(m.category_multiple) })),
-        el('div', null, el('span', { text: 'Growth \u00d7 (7d ' + fmtPct(row.change_7d) + ', clamped)' }), el('b', { class: 'num', text: fmtMult(m.growth_multiplier) })),
-        el('div', null, el('span', { text: 'Maturity \u00d7 (age ' + fmtAge(row.age_days) + ' with no token)' }), el('b', { class: 'num', text: fmtMult(m.maturity_multiplier) })),
-        el('div', null, el('span', { text: 'Chain footprint \u00d7 (' + (row.chains ? row.chains.length : 0) + ' chains)' }), el('b', { class: 'num', text: fmtMult(m.chain_multiplier) })),
+        el('div', null, el('span', { text: 'Blended multiple \u2014 weight ' + Math.round(w * 100) + '% component, ' + Math.round((1 - w) * 100) + '% regression' }), el('b', { class: 'num', text: fmtMult(m.multiple) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Category component (' + (row.category || 'Other') + ', ' + m.category_comps + ' traded peer' + (m.category_comps === 1 ? '' : 's') + ', shrunk median)' }), el('b', { class: 'num', text: fmtMult(m.category_multiple) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Regression multiple (anatomy below)' }), el('b', { class: 'num', text: fmtMult(m.regression_multiple) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Intercept' }), el('b', { class: 'num', text: fmtDex(cal.beta.intercept) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Size term (' + cal.beta.log_tvl.toFixed(4) + ' \u00d7 log10 TVL ' + lt.toFixed(4) + ')' }), el('b', { class: 'num', text: fmtDex(m.size_term_dex) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Growth term (' + cal.beta.growth.toFixed(4) + ' \u00d7 7d ' + (gClamped >= 0 ? '+' : '') + gClamped.toFixed(2) + '%, clamped)' }), el('b', { class: 'num', text: fmtDex(m.growth_term_dex) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Maturity term (' + cal.beta.maturity.toFixed(4) + ' \u00d7 ' + matFrac.toFixed(4) + (row.age_days === null ? ', age unrecorded \u2014 median used' : ', age ' + fmtAge(row.age_days)) + ')' }), el('b', { class: 'num', text: fmtDex(m.maturity_term_dex) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Chain term (' + (cal.beta.chains >= 0 ? '+' : '') + cal.beta.chains.toFixed(4) + ' \u00d7 ' + Math.min(row.chains ? row.chains.length : 0, 20) + ' chains)' }), el('b', { class: 'num', text: fmtDex(m.chain_term_dex) })),
+        el('div', { class: 'subrow' }, el('span', { text: 'Category effect (' + (m.category_comps >= 3 ? 'fitted for ' + (row.category || 'Other') : 'not fitted under 3 traded peers') + ')' }), el('b', { class: 'num', text: fmtDex(m.category_effect_dex) })),
         el('div', { class: 'total' }, el('span', { text: 'Implied launch value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
-      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ' scores every protocol with this same arithmetic; the category multiple is read off the calibration in the Model view, fitted from this snapshot\u2019s traded protocols \u2014 it is an estimate of what a launch could be worth if the protocol\u2019s record stayed as the snapshot shows it, not a forecast.' })
+      m.factor_capped ? el('p', { class: 'sub', text: 'One of this row\u2019s factor terms sits at the \u00b10.5 dex cap, so no single fitted factor moves its price further.' }) : null,
+      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ' prices every protocol with this same arithmetic, and every number above is printed so the price reproduces by hand: the regression multiple is 10 raised to the intercept plus the four terms plus the effect, the blended multiple is the peer-weighted geometric blend of the two components, and the implied value is TVL times the blend. It is an estimate of what a launch could be worth if the protocol\u2019s record stayed as the snapshot shows it, not a forecast.' })
     ));
     if (row.risk_flags && row.risk_flags.length > 0) {
       dialog.appendChild(el('section', { class: 'detail-section' },
